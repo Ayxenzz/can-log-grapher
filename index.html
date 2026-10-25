@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CAN Log Analyzer</title>
+<style>
+  body { font: 16px/1.45 system-ui, sans-serif; max-width: 1050px; margin: auto; padding: 16px; }
+  .panel { border: 1px solid #8888; border-radius: 12px; padding: 16px; margin: 14px 0; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 12px; }
+  label { font-weight: 600; font-size: .92rem; }
+  input, select, button { font: inherit; box-sizing: border-box; max-width: 100%; }
+  input, select { display: block; width: 100%; margin-top: 5px; padding: 9px; }
+  button { padding: 10px 14px; margin: 10px 8px 0 0; }
+  .muted { opacity: .75; font-size: .92rem; }
+  #status { white-space: pre-wrap; }
+  canvas { width: 100%; height: 340px; display: block; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+  .stat { background: #8882; padding: 10px; border-radius: 8px; }
+  .stat strong { display: block; font-size: 1.2rem; }
+  .tablewrap { overflow: auto; max-height: 380px; }
+  table { border-collapse: collapse; white-space: nowrap; font-size: .85rem; }
+  td, th { padding: 6px; border-bottom: 1px solid #8888; text-align: right; }
+  th { position: sticky; top: 0; background: Canvas; }
+</style>
+</head>
+<body>
+
+<h1>CAN Log Analyzer</h1>
+<p class="muted">Choose a raw CAN log, filter by ID, extract bytes, compare endian interpretations, graph values, and export CSV. The selected log is processed locally in your browser and is not uploaded.</p>
+
+<div class="panel">
+  <h2>1. Log file</h2>
+  <input id="file" type="file" accept=".txt,.log,.csv,text/plain">
+  <p id="fileinfo" class="muted">Expected line: 92039832,136,0,8,000200000000000C</p>
+</div>
+
+<div class="panel">
+  <h2>2. Signal settings</h2>
+  <div class="grid">
+    <label>CAN ID (hex)<input id="id" value="158"></label>
+    <label>First byte (0-based)<input id="start" type="number" min="0" max="63" value="0"></label>
+    <label>Byte count<input id="count" type="number" min="1" max="8" value="2"></label>
+    <label>Graph byte order<select id="endian"><option value="both">Both</option><option value="big">Big-endian</option><option value="little">Little-endian</option></select></label>
+    <label>Scale multiplier<input id="scale" type="number" step="any" value="0.01"></label>
+    <label>Offset<input id="offset" type="number" step="any" value="0"></label>
+  </div>
+  <p class="muted">Byte 0 is the first data byte. Scale/offset are hypotheses unless verified from documentation or a known measurement.</p>
+  <button id="go">Analyze log</button>
+  <button id="reset">Reset</button>
+  <div id="status"></div>
+</div>
+
+<div id="results" hidden>
+  <div class="panel">
+    <h2>3. Summary</h2>
+    <div id="stats" class="stats"></div>
+    <button id="csv">Download filtered CSV</button>
+    <button id="png">Save graph as PNG</button>
+  </div>
+  <div class="panel">
+    <h2>Signal over time</h2>
+    <p id="chartnote" class="muted"></p>
+    <canvas id="chart" width="1100" height="400"></canvas>
+    <p class="muted">Hover over the chart to inspect readings. Elapsed time assumes timestamps are microseconds.</p>
+  </div>
+  <div class="panel">
+    <h2>Filtered rows (first 300)</h2>
+    <div class="tablewrap"><table id="preview"></table></div>
+  </div>
+</div>
+
+<script>
+const $ = x => document.getElementById(x);
+let result = null, ci = null;
+const fmt = n => Number(n).toLocaleString(undefined, { maximumFractionDigits: 4 });
+
+$('file').onchange = () => {
+  let f = $('file').files[0];
+  $('fileinfo').textContent = f ? f.name + ' · ' + (f.size / 1048576).toFixed(2) + ' MB' : 'No file selected';
+};
+
+$('reset').onclick = () => {
+  $('id').value = '158';
+  $('start').value = 0;
+  $('count').value = 2;
+  $('endian').value = 'both';
+  $('scale').value = .01;
+  $('offset').value = 0;
+  $('status').textContent = 'Settings reset.';
+};
+
+function norm(s) {
+  s = String(s).trim().toLowerCase().replace(/^0x/, '');
+  return s.replace(/^0+(?=.)/, '') || '0';
+}
+
+$('go').onclick = async () => {
+  let f = $('file').files[0];
+  if (!f) { $('status').textContent = 'Choose a log file first.'; return; }
+  let cfg = {
+    id: $('id').value.trim(),
+    start: +$('start').value,
+    count: +$('count').value,
+    endian: $('endian').value,
+    scale: +$('scale').value,
+    offset: +$('offset').value
+  };
+  if (!/^(0x)?[0-9a-f]+$/i.test(cfg.id) || !Number.isInteger(cfg.start) || cfg.start < 0 || !Number.isInteger(cfg.count) || cfg.count < 1 || cfg.count > 8 || cfg.start + cfg.count > 64 || !Number.isFinite(cfg.scale) || !Number.isFinite(cfg.offset)) {
+    $('status').textContent = 'Check ID, byte positions, count, scale and offset.';
+    return;
+  }
+  $('go').disabled = true;
+  $('status').textContent = 'Analyzing locally…';
+  try {
+    let text = await f.text(), lines = text.split(/\r?\n/), target = norm(cfg.id), rows = [];
+    for (let line of lines) {
+      let p = line.trim().split(',').map(s => s.trim());
+      if (p.length < 5 || norm(p[1]) !== target) continue;
+      let ts = Number(p[0]), d = p[4].replace(/\s/g, '');
+      if (!Number.isFinite(ts) || !/^[0-9a-f]*$/i.test(d) || d.length % 2) continue;
+      let b = [];
+      for (let i = 0; i < d.length; i += 2) b.push(parseInt(d.slice(i, i + 2), 16));
+      if (b.length < cfg.start + cfg.count) continue;
+      b = b.slice(cfg.start, cfg.start + cfg.count);
+      let big = 0, little = 0;
+      b.forEach(v => big = big * 256 + v);
+      b.forEach((v, i) => little += v * 256 ** i);
+      rows.push({
+        timestamp: ts,
+        can_id: p[1],
+        bytes_hex: b.map(v => v.toString(16).padStart(2, '0')).join('').toUpperCase(),
+        big_raw: big,
+        little_raw: little,
+        big_scaled: big * cfg.scale + cfg.offset,
+        little_scaled: little * cfg.scale + cfg.offset
+      });
+    }
+    if (!rows.length) throw Error('No matching messages found. Check the CAN ID and byte count.');
+    rows.sort((a, b) => a.timestamp - b.timestamp);
+    let first = rows[0].timestamp;
+    rows.forEach(r => {
+      r.elapsed_s = (r.timestamp - first) / 1e6;
+      r.selected_raw = cfg.endian === 'little' ? r.little_raw : r.big_raw;
+      r.selected_value = cfg.endian === 'little' ? r.little_scaled : r.big_scaled;
+    });
+    result = { cfg, rows, count: rows.length, total: lines.length };
+    show();
+    $('status').textContent = `Scanned ${lines.length.toLocaleString()} lines; matched ${rows.length.toLocaleString()} messages.`;
+  } catch (e) {
+    $('status').textContent = 'Error: ' + e.message;
+  } finally {
+    $('go').disabled = false;
+  }
+};
+
+function show() {
+  $('results').hidden = false;
+  let d = result, r = d.rows, v = r.map(x => x.selected_value), raw = r.map(x => x.selected_raw), duration = r[r.length - 1].elapsed_s;
+  let s = [
+    ['Matching messages', d.count.toLocaleString()],
+    ['Duration', fmt(duration) + ' s'],
+    ['Selected raw min / max', fmt(Math.min(...raw)) + ' / ' + fmt(Math.max(...raw))],
+    ['Scaled min / max', fmt(Math.min(...v)) + ' / ' + fmt(Math.max(...v))],
+    ['Scaled average', fmt(v.reduce((a, b) => a + b, 0) / v.length)]
+  ];
+  $('stats').innerHTML = s.map(([a, b]) => `<div class="stat">${a}<strong>${b}</strong></div>`).join('');
+  $('chartnote').textContent = `ID 0x${norm(d.cfg.id).toUpperCase()}, bytes ${d.cfg.start}–${d.cfg.start + d.cfg.count - 1}, scale ${d.cfg.scale}, offset ${d.cfg.offset}.`;
+  draw();
+  let cols = ['timestamp', 'elapsed_s', 'can_id', 'bytes_hex', 'big_raw', 'little_raw', 'big_scaled', 'little_scaled'];
+  $('preview').innerHTML = '<thead><tr>' + cols.map(c => `<th>${c}</th>`).join('') + '</tr></thead><tbody>' + r.slice(0, 300).map(x => '<tr>' + cols.map(c => `<td>${x[c]}</td>`).join('') + '</tr>').join('') + '</tbody>';
+}
+
+function draw() {
+  let c = $('chart'), x = c.getContext('2d'), r = result.rows, w = c.width, h = c.height, L = 75, R = 20, T = 30, B = 48, pw = w - L - R, ph = h - T - B;
+  x.clearRect(0, 0, w, h);
+  let ss = [];
+  if (result.cfg.endian !== 'little') ss.push({ k: 'big_scaled', n: 'Big-endian' });
+  if (result.cfg.endian !== 'big') ss.push({ k: 'little_scaled', n: 'Little-endian' });
+  let vals = ss.flatMap(s => r.map(a => a[s.k])), xmin = r[0].elapsed_s, xmax = r.at(-1).elapsed_s || 1, ymin = Math.min(0, ...vals), ymax = Math.max(...vals);
+  if (ymax === ymin) ymax = ymin + 1;
+  let pad = (ymax - ymin) * .05;
+  ymin -= pad; ymax += pad;
+  let X = v => L + (v - xmin) / (xmax - xmin) * pw, Y = v => T + ph - (v - ymin) / (ymax - ymin) * ph;
+  x.font = '12px system-ui'; x.strokeStyle = '#8887'; x.fillStyle = getComputedStyle(document.body).color;
+  for (let i = 0; i <= 5; i++) {
+    let yy = T + ph * i / 5;
+    x.beginPath(); x.moveTo(L, yy); x.lineTo(w - R, yy); x.stroke();
+    x.textAlign = 'right'; x.fillText(fmt(ymax - (ymax - ymin) * i / 5), L - 8, yy + 4);
+    let xx = L + pw * i / 5;
+    x.beginPath(); x.moveTo(xx, T); x.lineTo(xx, T + ph); x.stroke();
+    x.textAlign = 'center'; x.fillText(fmt(xmin + (xmax - xmin) * i / 5), xx, T + ph + 20);
+  }
+  x.textAlign = 'center'; x.fillText('Elapsed time (seconds)', L + pw / 2, h - 8);
+  x.save(); x.translate(17, T + ph / 2); x.rotate(-Math.PI / 2); x.fillText('Scaled value', 0, 0); x.restore();
+  let colors = ['#1677d2', '#d97706'];
+  ss.forEach((s, j) => {
+    x.strokeStyle = colors[j]; x.lineWidth = 1.4; x.beginPath();
+    r.forEach((a, i) => i ? x.lineTo(X(a.elapsed_s), Y(a[s.k])) : x.moveTo(X(a.elapsed_s), Y(a[s.k])));
+    x.stroke();
+    x.fillStyle = colors[j]; x.fillRect(L + 8 + j * 135, T - 14, 14, 3);
+    x.fillStyle = getComputedStyle(document.body).color; x.textAlign = 'left'; x.fillText(s.n, L + 28 + j * 135, T - 9);
+  });
+  ci = { X, xmin, xmax, r, L, pw };
+}
+
+$('chart').onmousemove = e => {
+  if (!ci) return;
+  let rect = $('chart').getBoundingClientRect(), x = (e.clientX - rect.left) * $('chart').width / rect.width, t = ci.xmin + (x - ci.L) / ci.pw * (ci.xmax - ci.xmin);
+  if (x < ci.L) return;
+  let lo = 0, hi = ci.r.length - 1;
+  while (lo < hi) {
+    let m = (lo + hi) >> 1;
+    if (ci.r[m].elapsed_s < t) lo = m + 1;
+    else hi = m;
+  }
+  let a = ci.r[lo];
+  $('chartnote').textContent = `t=${fmt(a.elapsed_s)} s · bytes ${a.bytes_hex} · big raw ${a.big_raw} (${fmt(a.big_scaled)}) · little raw ${a.little_raw} (${fmt(a.little_scaled)})`;
+};
+
+$('csv').onclick = () => {
+  let cols = ['timestamp', 'elapsed_s', 'can_id', 'bytes_hex', 'big_raw', 'little_raw', 'big_scaled', 'little_scaled'];
+  let esc = v => { let s = String(v ?? ''); return /[",\n]/.test(s) ? '"' + s.replaceAll('"', '""') + '"' : s; };
+  let data = [cols.join(','), ...result.rows.map(r => cols.map(c => esc(r[c])).join(','))].join('\n');
+  let a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([data], { type: 'text/csv' }));
+  a.download = `can_${norm(result.cfg.id)}_filtered.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+};
+
+$('png').onclick = () => {
+  let a = document.createElement('a');
+  a.href = $('chart').toDataURL('image/png');
+  a.download = `can_${norm(result.cfg.id)}_chart.png`;
+  a.click();
+};
+</script>
+
+</body>
+</html>
