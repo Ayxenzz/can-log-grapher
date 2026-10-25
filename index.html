@@ -75,7 +75,6 @@
       <button class="secondary" id="png" disabled>Download chart PNG</button>
     </div>
     
-    <p class="muted">Intel: start bit is the least-significant signal bit; read upward through bytes. Motorola DBC: start bit is the most-significant signal bit; move toward bit 0, then continue at bit 7 of the next byte. Bit 0 is each byte's least-significant bit.</p>
     <p id="msg"></p>
   </section>
 
@@ -131,6 +130,18 @@ function parse(s) {
 }
 
 function extract(bytes, sb, st, n, mode) {
+  let byteCount = Math.ceil(n / 8);
+  if (st === 0 && n % 8 === 0 && sb + byteCount <= bytes.length) {
+    let sub = bytes.slice(sb, sb + byteCount);
+    let val = 0;
+    if (mode === 'little') {
+      sub.forEach((v, i) => val += v * (256 ** i));
+    } else {
+      sub.forEach(v => val = val * 256 + v);
+    }
+    return val;
+  }
+
   let v = 0n;
   if (mode === 'little') {
     for (let i = 0; i < n; i++) {
@@ -139,16 +150,12 @@ function extract(bytes, sb, st, n, mode) {
       if ((bytes[bi] >> bt) & 1) v |= 1n << BigInt(i);
     }
   } else {
-    let totalBits = sb * 8 + st + n;
-    let endByte = Math.ceil(totalBits / 8);
-    if (endByte > bytes.length) return null;
-    let subBytes = bytes.slice(sb, endByte);
-    for (let i = 0; i < subBytes.length; i++) {
-      v = (v << 8n) + BigInt(subBytes[i]);
+    for (let i = 0; i < n; i++) {
+      let curByte = Math.floor((sb * 8 + st - i) / 8);
+      let curBit = (sb * 8 + st - i) % 8;
+      if (curByte < 0 || curByte >= bytes.length) return null;
+      v = (v << 1n) | BigInt((bytes[curByte] >> curBit) & 1);
     }
-    let shiftRight = (endByte * 8) - (sb * 8 + st + n);
-    let mask = (1n << BigInt(n)) - 1n;
-    v = (v >> BigInt(shiftRight)) & mask;
   }
   return Number(v);
 }
