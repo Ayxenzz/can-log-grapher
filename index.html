@@ -3,238 +3,291 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CAN Log Analyzer</title>
+<title>CAN Bit Signal Analyzer</title>
 <style>
-  body { font: 16px/1.45 system-ui, sans-serif; max-width: 1050px; margin: auto; padding: 16px; }
-  .panel { border: 1px solid #8888; border-radius: 12px; padding: 16px; margin: 14px 0; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 12px; }
-  label { font-weight: 600; font-size: .92rem; }
-  input, select, button { font: inherit; box-sizing: border-box; max-width: 100%; }
-  input, select { display: block; width: 100%; margin-top: 5px; padding: 9px; }
-  button { padding: 10px 14px; margin: 10px 8px 0 0; }
-  .muted { opacity: .75; font-size: .92rem; }
-  #status { white-space: pre-wrap; }
-  canvas { width: 100%; height: 340px; display: block; }
-  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
-  .stat { background: #8882; padding: 10px; border-radius: 8px; }
-  .stat strong { display: block; font-size: 1.2rem; }
-  .tablewrap { overflow: auto; max-height: 380px; }
-  table { border-collapse: collapse; white-space: nowrap; font-size: .85rem; }
-  td, th { padding: 6px; border-bottom: 1px solid #8888; text-align: right; }
-  th { position: sticky; top: 0; background: Canvas; }
+  body { font: 16px system-ui; margin: 0; background: #f3f6fb; color: #172033; }
+  header { background: #172033; color: white; padding: 20px; }
+  main { max-width: 1100px; margin: 18px auto; padding: 0 12px; }
+  .panel { background: white; border: 1px solid #dbe2ee; border-radius: 10px; padding: 16px; margin: 12px 0; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); gap: 12px; }
+  label { display: flex; flex-direction: column; gap: 5px; font-size: .9rem; font-weight: 600; }
+  input, select, button { padding: 9px; border: 1px solid #bdc8d9; border-radius: 7px; font: inherit; min-width: 0; }
+  button { background: #225bd6; color: white; border: 0; cursor: pointer; font-weight: 700; }
+  .secondary { background: #e8eef9; color: #17345f; }
+  .actions { display: flex; gap: 9px; flex-wrap: wrap; margin-top: 14px; }
+  .muted { color: #5e6a7d; font-size: .9rem; }
+  .note { padding: 10px; background: #fff7dc; border-radius: 7px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
+  .stat { background: #f1f5fb; padding: 12px; border-radius: 8px; }
+  .stat span { display: block; font-size: .8rem; color: #5e6a7d; }
+  .stat strong { font-size: 1.2rem; }
+  canvas { width: 100%; height: 320px; border: 1px solid #e0e5ef; border-radius: 8px; display: block; }
+  .tablewrap { overflow: auto; max-height: 340px; }
+  table { border-collapse: collapse; width: 100%; font-size: .85rem; }
+  td, th { padding: 8px; border-bottom: 1px solid #e4e9f1; text-align: left; white-space: nowrap; }
+  th { background: #f4f6fa; }
+  .ok { color: #18734b; }
+  .err { color: #a21e1e; }
 </style>
 </head>
 <body>
 
-<h1>CAN Log Analyzer</h1>
-<p class="muted">Choose a raw CAN log, filter by ID, extract bytes, compare endian interpretations, graph values, and export CSV. The selected log is processed locally in your browser and is not uploaded.</p>
+<header>
+  <h1>CAN Bit Signal Analyzer</h1>
+  <div>Extract exact bits, graph the signal, and export CSV.</div>
+</header>
 
-<div class="panel">
-  <h2>1. Log file</h2>
-  <input id="file" type="file" accept=".txt,.log,.csv,text/plain">
-  <p id="fileinfo" class="muted">Expected line: 92039832,136,0,8,000200000000000C</p>
-</div>
+<main>
+  <section class="panel">
+    <h2>1. Load log</h2>
+    <label>CAN log TXT / CSV<input id="file" type="file" accept=".txt,.log,.csv"></label>
+    <p id="fileStatus" class="muted">Expected line format: timestamp,CAN_ID,flag,DLC,HEX_PAYLOAD</p>
+    <div class="note">The selected file is processed locally in your browser and is not uploaded. Timestamps are assumed to be microseconds for elapsed time.</div>
+  </section>
 
-<div class="panel">
-  <h2>2. Signal settings</h2>
-  <div class="grid">
-    <label>CAN ID (hex)<input id="id" value="158"></label>
-    <label>First byte (0-based)<input id="start" type="number" min="0" max="63" value="0"></label>
-    <label>Byte count<input id="count" type="number" min="1" max="8" value="2"></label>
-    <label>Graph byte order<select id="endian"><option value="both">Both</option><option value="big">Big-endian</option><option value="little">Little-endian</option></select></label>
-    <label>Scale multiplier<input id="scale" type="number" step="any" value="0.01"></label>
-    <label>Offset<input id="offset" type="number" step="any" value="0"></label>
-  </div>
-  <p class="muted">Byte 0 is the first data byte. Scale/offset are hypotheses unless verified from documentation or a known measurement.</p>
-  <button id="go">Analyze log</button>
-  <button id="reset">Reset</button>
-  <div id="status"></div>
-</div>
+  <section class="panel">
+    <h2>2. Signal settings</h2>
+    <div class="grid">
+      <label>CAN ID (hex)<input id="id" value="158"></label>
+      <label>Start byte (0–7)<input id="sb" type="number" min="0" max="7" value="0"></label>
+      <label>Start bit (0–7)<input id="bit" type="number" min="0" max="7" value="0"></label>
+      <label>Bit length (1–64)<input id="len" type="number" min="1" max="64" value="8"></label>
+      <label>Bit/byte order
+        <select id="endian">
+          <option value="little">Intel / little-endian</option>
+          <option value="big">Motorola / big-endian (DBC)</option>
+        </select>
+      </label>
+      <label>Scale multiplier<input id="scale" type="number" step="any" value="1"></label>
+      <label>Offset<input id="offset" type="number" step="any" value="0"></label>
+      <label>Output
+        <select id="mode">
+          <option value="scaled">Raw × scale + offset</option>
+          <option value="raw">Raw integer</option>
+          <option value="percent">Normalize to 0–100%</option>
+        </select>
+      </label>
+    </div>
+    
+    <div class="actions">
+      <button id="run">Analyze</button>
+      <button class="secondary" id="csv" disabled>Download CSV</button>
+      <button class="secondary" id="png" disabled>Download chart PNG</button>
+    </div>
+    
+    <p class="muted">Intel: start bit is the least-significant signal bit; read upward through bytes. Motorola DBC: start bit is the most-significant signal bit; move toward bit 0, then continue at bit 7 of the next byte. Bit 0 is each byte's least-significant bit.</p>
+    <p id="msg"></p>
+  </section>
 
-<div id="results" hidden>
-  <div class="panel">
+  <section class="panel">
     <h2>3. Summary</h2>
-    <div id="stats" class="stats"></div>
-    <button id="csv">Download filtered CSV</button>
-    <button id="png">Save graph as PNG</button>
-  </div>
-  <div class="panel">
-    <h2>Signal over time</h2>
-    <p id="chartnote" class="muted"></p>
-    <canvas id="chart" width="1100" height="400"></canvas>
-    <p class="muted">Hover over the chart to inspect readings. Elapsed time assumes timestamps are microseconds.</p>
-  </div>
-  <div class="panel">
-    <h2>Filtered rows (first 300)</h2>
-    <div class="tablewrap"><table id="preview"></table></div>
-  </div>
-</div>
+    <div class="stats" id="stats"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Signal graph</h2>
+    <canvas id="chart" width="1100" height="330"></canvas>
+  </section>
+
+  <section class="panel">
+    <h2>First 200 extracted rows</h2>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Timestamp</th>
+            <th>Elapsed (s)</th>
+            <th>ID</th>
+            <th>Payload</th>
+            <th>Raw</th>
+            <th>Output</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
 
 <script>
 const $ = x => document.getElementById(x);
-let result = null, ci = null;
-const fmt = n => Number(n).toLocaleString(undefined, { maximumFractionDigits: 4 });
+let source = [], out = [];
 
-$('file').onchange = () => {
-  let f = $('file').files[0];
-  $('fileinfo').textContent = f ? f.name + ' · ' + (f.size / 1048576).toFixed(2) + ' MB' : 'No file selected';
+$('file').onchange = async e => {
+  let f = e.target.files[0];
+  if (!f) return;
+  source = (await f.text()).split(/\r?\n/).filter(x => x.trim());
+  $('fileStatus').textContent = `Loaded ${f.name}: ${source.length.toLocaleString()} lines.`;
 };
 
-$('reset').onclick = () => {
-  $('id').value = '158';
-  $('start').value = 0;
-  $('count').value = 2;
-  $('endian').value = 'both';
-  $('scale').value = .01;
-  $('offset').value = 0;
-  $('status').textContent = 'Settings reset.';
-};
-
-function norm(s) {
-  s = String(s).trim().toLowerCase().replace(/^0x/, '');
-  return s.replace(/^0+(?=.)/, '') || '0';
+function parse(s) {
+  let p = s.trim().split(/[\s,;]+/);
+  if (p.length < 5) return null;
+  let t = Number(p[0]), id = p[1].replace(/^0x/i, '').toUpperCase(), payload = p[4].replace(/^0x/i, '').replace(/[^0-9a-f]/gi, '');
+  if (!Number.isFinite(t) || payload.length < 2) return null;
+  let b = [];
+  for (let i = 0; i + 1 < payload.length; i += 2) b.push(parseInt(payload.slice(i, i + 2), 16));
+  return { t, id, payload: payload.toUpperCase(), b };
 }
 
-$('go').onclick = async () => {
-  let f = $('file').files[0];
-  if (!f) { $('status').textContent = 'Choose a log file first.'; return; }
-  let cfg = {
-    id: $('id').value.trim(),
-    start: +$('start').value,
-    count: +$('count').value,
-    endian: $('endian').value,
-    scale: +$('scale').value,
-    offset: +$('offset').value
-  };
-  if (!/^(0x)?[0-9a-f]+$/i.test(cfg.id) || !Number.isInteger(cfg.start) || cfg.start < 0 || !Number.isInteger(cfg.count) || cfg.count < 1 || cfg.count > 8 || cfg.start + cfg.count > 64 || !Number.isFinite(cfg.scale) || !Number.isFinite(cfg.offset)) {
-    $('status').textContent = 'Check ID, byte positions, count, scale and offset.';
+function extract(bytes, sb, st, n, mode) {
+  let v = 0n;
+  if (mode === 'little') {
+    for (let i = 0; i < n; i++) {
+      let p = sb * 8 + st + i, bi = Math.floor(p / 8), bt = p % 8;
+      if (bi >= bytes.length) return null;
+      if ((bytes[bi] >> bt) & 1) v |= 1n << BigInt(i);
+    }
+  } else {
+    let bi = sb, bt = st;
+    for (let i = 0; i < n; i++) {
+      if (bi >= bytes.length) return null;
+      v = (v << 1n) | BigInt((bytes[bi] >> bt) & 1);
+      bt--;
+      if (bt < 0) { bt = 7; bi++; }
+    }
+  }
+  return Number(v);
+}
+
+function fmt(n) {
+  return Number(n).toLocaleString(undefined, { maximumFractionDigits: 6 });
+}
+
+$('run').onclick = () => {
+  let id = $('id').value.trim().replace(/^0x/i, '').toUpperCase(),
+      sb = +$('sb').value,
+      st = +$('bit').value,
+      n = +$('len').value,
+      scale = +$('scale').value,
+      offset = +$('offset').value,
+      mode = $('mode').value,
+      endian = $('endian').value;
+
+  if (!source.length) {
+    $('msg').textContent = 'Please choose a log file first.';
+    $('msg').className = 'err';
     return;
   }
-  $('go').disabled = true;
-  $('status').textContent = 'Analyzing locally…';
-  try {
-    let text = await f.text(), lines = text.split(/\r?\n/), target = norm(cfg.id), rows = [];
-    for (let line of lines) {
-      let p = line.trim().split(',').map(s => s.trim());
-      if (p.length < 5 || norm(p[1]) !== target) continue;
-      let ts = Number(p[0]), d = p[4].replace(/\s/g, '');
-      if (!Number.isFinite(ts) || !/^[0-9a-f]*$/i.test(d) || d.length % 2) continue;
-      let b = [];
-      for (let i = 0; i < d.length; i += 2) b.push(parseInt(d.slice(i, i + 2), 16));
-      if (b.length < cfg.start + cfg.count) continue;
-      b = b.slice(cfg.start, cfg.start + cfg.count);
-      let big = 0, little = 0;
-      b.forEach(v => big = big * 256 + v);
-      b.forEach((v, i) => little += v * 256 ** i);
-      rows.push({
-        timestamp: ts,
-        can_id: p[1],
-        bytes_hex: b.map(v => v.toString(16).padStart(2, '0')).join('').toUpperCase(),
-        big_raw: big,
-        little_raw: little,
-        big_scaled: big * cfg.scale + cfg.offset,
-        little_scaled: little * cfg.scale + cfg.offset
-      });
-    }
-    if (!rows.length) throw Error('No matching messages found. Check the CAN ID and byte count.');
-    rows.sort((a, b) => a.timestamp - b.timestamp);
-    let first = rows[0].timestamp;
-    rows.forEach(r => {
-      r.elapsed_s = (r.timestamp - first) / 1e6;
-      r.selected_raw = cfg.endian === 'little' ? r.little_raw : r.big_raw;
-      r.selected_value = cfg.endian === 'little' ? r.little_scaled : r.big_scaled;
-    });
-    result = { cfg, rows, count: rows.length, total: lines.length };
-    show();
-    $('status').textContent = `Scanned ${lines.length.toLocaleString()} lines; matched ${rows.length.toLocaleString()} messages.`;
-  } catch (e) {
-    $('status').textContent = 'Error: ' + e.message;
-  } finally {
-    $('go').disabled = false;
+  if (!id || !Number.isInteger(sb) || sb < 0 || sb > 7 || !Number.isInteger(st) || st < 0 || st > 7 || !Number.isInteger(n) || n < 1 || n > 64 || !Number.isFinite(scale) || !Number.isFinite(offset)) {
+    $('msg').textContent = 'Check the signal settings.';
+    $('msg').className = 'err';
+    return;
   }
-};
 
-function show() {
-  $('results').hidden = false;
-  let d = result, r = d.rows, v = r.map(x => x.selected_value), raw = r.map(x => x.selected_raw), duration = r[r.length - 1].elapsed_s;
-  let s = [
-    ['Matching messages', d.count.toLocaleString()],
-    ['Duration', fmt(duration) + ' s'],
-    ['Selected raw min / max', fmt(Math.min(...raw)) + ' / ' + fmt(Math.max(...raw))],
-    ['Scaled min / max', fmt(Math.min(...v)) + ' / ' + fmt(Math.max(...v))],
-    ['Scaled average', fmt(v.reduce((a, b) => a + b, 0) / v.length)]
-  ];
-  $('stats').innerHTML = s.map(([a, b]) => `<div class="stat">${a}<strong>${b}</strong></div>`).join('');
-  $('chartnote').textContent = `ID 0x${norm(d.cfg.id).toUpperCase()}, bytes ${d.cfg.start}–${d.cfg.start + d.cfg.count - 1}, scale ${d.cfg.scale}, offset ${d.cfg.offset}.`;
-  draw();
-  let cols = ['timestamp', 'elapsed_s', 'can_id', 'bytes_hex', 'big_raw', 'little_raw', 'big_scaled', 'little_scaled'];
-  $('preview').innerHTML = '<thead><tr>' + cols.map(c => `<th>${c}</th>`).join('') + '</tr></thead><tbody>' + r.slice(0, 300).map(x => '<tr>' + cols.map(c => `<td>${x[c]}</td>`).join('') + '</tr>').join('') + '</tbody>';
-}
-
-function draw() {
-  let c = $('chart'), x = c.getContext('2d'), r = result.rows, w = c.width, h = c.height, L = 75, R = 20, T = 30, B = 48, pw = w - L - R, ph = h - T - B;
-  x.clearRect(0, 0, w, h);
-  let ss = [];
-  if (result.cfg.endian !== 'little') ss.push({ k: 'big_scaled', n: 'Big-endian' });
-  if (result.cfg.endian !== 'big') ss.push({ k: 'little_scaled', n: 'Little-endian' });
-  let vals = ss.flatMap(s => r.map(a => a[s.k])), xmin = r[0].elapsed_s, xmax = r.at(-1).elapsed_s || 1, ymin = Math.min(0, ...vals), ymax = Math.max(...vals);
-  if (ymax === ymin) ymax = ymin + 1;
-  let pad = (ymax - ymin) * .05;
-  ymin -= pad; ymax += pad;
-  let X = v => L + (v - xmin) / (xmax - xmin) * pw, Y = v => T + ph - (v - ymin) / (ymax - ymin) * ph;
-  x.font = '12px system-ui'; x.strokeStyle = '#8887'; x.fillStyle = getComputedStyle(document.body).color;
-  for (let i = 0; i <= 5; i++) {
-    let yy = T + ph * i / 5;
-    x.beginPath(); x.moveTo(L, yy); x.lineTo(w - R, yy); x.stroke();
-    x.textAlign = 'right'; x.fillText(fmt(ymax - (ymax - ymin) * i / 5), L - 8, yy + 4);
-    let xx = L + pw * i / 5;
-    x.beginPath(); x.moveTo(xx, T); x.lineTo(xx, T + ph); x.stroke();
-    x.textAlign = 'center'; x.fillText(fmt(xmin + (xmax - xmin) * i / 5), xx, T + ph + 20);
-  }
-  x.textAlign = 'center'; x.fillText('Elapsed time (seconds)', L + pw / 2, h - 8);
-  x.save(); x.translate(17, T + ph / 2); x.rotate(-Math.PI / 2); x.fillText('Scaled value', 0, 0); x.restore();
-  let colors = ['#1677d2', '#d97706'];
-  ss.forEach((s, j) => {
-    x.strokeStyle = colors[j]; x.lineWidth = 1.4; x.beginPath();
-    r.forEach((a, i) => i ? x.lineTo(X(a.elapsed_s), Y(a[s.k])) : x.moveTo(X(a.elapsed_s), Y(a[s.k])));
-    x.stroke();
-    x.fillStyle = colors[j]; x.fillRect(L + 8 + j * 135, T - 14, 14, 3);
-    x.fillStyle = getComputedStyle(document.body).color; x.textAlign = 'left'; x.fillText(s.n, L + 28 + j * 135, T - 9);
+  out = [];
+  source.map(parse).filter(Boolean).filter(r => r.id === id).forEach(r => {
+    let raw = extract(r.b, sb, st, n, endian);
+    if (raw === null) return;
+    let y = mode === 'raw' ? raw : mode === 'percent' ? raw / (2**n - 1) * 100 : raw * scale + offset;
+    out.push({ ...r, raw, y });
   });
-  ci = { X, xmin, xmax, r, L, pw };
-}
 
-$('chart').onmousemove = e => {
-  if (!ci) return;
-  let rect = $('chart').getBoundingClientRect(), x = (e.clientX - rect.left) * $('chart').width / rect.width, t = ci.xmin + (x - ci.L) / ci.pw * (ci.xmax - ci.xmin);
-  if (x < ci.L) return;
-  let lo = 0, hi = ci.r.length - 1;
-  while (lo < hi) {
-    let m = (lo + hi) >> 1;
-    if (ci.r[m].elapsed_s < t) lo = m + 1;
-    else hi = m;
+  if (!out.length) {
+    $('msg').textContent = 'No matching/extractable rows. Check CAN ID and settings.';
+    $('msg').className = 'err';
+    $('stats').innerHTML = '';
+    $('rows').innerHTML = '';
+    draw([]);
+    return;
   }
-  let a = ci.r[lo];
-  $('chartnote').textContent = `t=${fmt(a.elapsed_s)} s · bytes ${a.bytes_hex} · big raw ${a.big_raw} (${fmt(a.big_scaled)}) · little raw ${a.little_raw} (${fmt(a.little_scaled)})`;
+
+  let t0 = out[0].t;
+  out.forEach(r => r.x = (r.t - t0) / 1e6);
+  let ys = out.map(r => r.y), raws = out.map(r => r.raw);
+
+  $('stats').innerHTML = [
+    ['Samples', out.length.toLocaleString()],
+    ['Duration (s)', fmt(out[out.length - 1].x)],
+    ['Minimum', fmt(Math.min(...ys))],
+    ['Maximum', fmt(Math.max(...ys))],
+    ['Average', fmt(ys.reduce((a, b) => a + b, 0) / ys.length)],
+    ['Raw range', `${fmt(Math.min(...raws))} – ${fmt(Math.max(...raws))}`]
+  ].map(a => `<div class="stat"><span>${a[0]}</span><strong>${a[1]}</strong></div>`).join('');
+
+  $('rows').innerHTML = out.slice(0, 200).map(r => `<tr><td>${r.t}</td><td>${r.x.toFixed(6)}</td><td>${r.id}</td><td>${r.payload}</td><td>${r.raw}</td><td>${r.y}</td></tr>`).join('');
+
+  let plot = out;
+  if (out.length > 5000) {
+    let step = (out.length - 1) / 4999;
+    plot = Array.from({ length: 5000 }, (_, i) => out[Math.round(i * step)]);
+  }
+
+  draw(plot);
+  $('msg').textContent = `Analyzed ${out.length.toLocaleString()} samples for CAN ID ${id}.`;
+  $('msg').className = 'ok';
+  $('csv').disabled = false;
+  $('png').disabled = false;
 };
+
+function draw(d) {
+  let c = $('chart'), ctx = c.getContext('2d'), w = c.width, h = c.height;
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, w, h);
+
+  if (!d.length) {
+    ctx.fillStyle = '#687487';
+    ctx.font = '16px sans-serif';
+    ctx.fillText('Analyze a signal to display its graph.', 24, 40);
+    return;
+  }
+
+  let l = 72, r = 20, top = 20, bottom = 42, pw = w - l - r, ph = h - top - bottom,
+      x0 = d[0].x, x1 = d[d.length - 1].x,
+      y0 = Math.min(...d.map(a => a.y)), y1 = Math.max(...d.map(a => a.y));
+
+  if (x0 === x1) x1 = x0 + 1;
+  if (y0 === y1) { y0 -= 1; y1 += 1; }
+  let yp = (y1 - y0) * .06;
+  y0 -= yp; y1 += yp;
+
+  let X = x => l + (x - x0) / (x1 - x0) * pw,
+      Y = y => top + (y1 - y) / (y1 - y0) * ph;
+
+  ctx.strokeStyle = '#e2e7ef';
+  ctx.fillStyle = '#5b6678';
+  ctx.font = '12px sans-serif';
+
+  for (let i = 0; i <= 5; i++) {
+    let yy = top + i * ph / 5;
+    ctx.beginPath();
+    ctx.moveTo(l, yy);
+    ctx.lineTo(w - r, yy);
+    ctx.stroke();
+    ctx.fillText(fmt(y1 - i * (y1 - y0) / 5), 6, yy + 4);
+
+    let xx = l + i * pw / 5;
+    ctx.fillText(fmt(x0 + i * (x1 - x0) / 5), xx - 12, h - 16);
+  }
+
+  ctx.strokeStyle = '#225bd6';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  d.forEach((a, i) => i ? ctx.lineTo(X(a.x), Y(a.y)) : ctx.moveTo(X(a.x), Y(a.y)));
+  ctx.stroke();
+
+  ctx.fillStyle = '#172033';
+  ctx.font = '13px sans-serif';
+  ctx.fillText('Elapsed time (seconds)', w / 2 - 65, h - 2);
+}
 
 $('csv').onclick = () => {
-  let cols = ['timestamp', 'elapsed_s', 'can_id', 'bytes_hex', 'big_raw', 'little_raw', 'big_scaled', 'little_scaled'];
-  let esc = v => { let s = String(v ?? ''); return /[",\n]/.test(s) ? '"' + s.replaceAll('"', '""') + '"' : s; };
-  let data = [cols.join(','), ...result.rows.map(r => cols.map(c => esc(r[c])).join(','))].join('\n');
-  let a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([data], { type: 'text/csv' }));
-  a.download = `can_${norm(result.cfg.id)}_filtered.csv`;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  let data = ['timestamp,elapsed_seconds,can_id,payload,raw_value,output_value', ...out.map(r => [r.t, r.x.toFixed(6), r.id, r.payload, r.raw, r.y].join(','))].join('\n');
+  download(new Blob([data], { type: 'text/csv' }), 'can_signal.csv');
 };
 
-$('png').onclick = () => {
+$('png').onclick = () => $('chart').toBlob(b => b && download(b, 'can_signal_chart.png'));
+
+function download(b, n) {
   let a = document.createElement('a');
-  a.href = $('chart').toDataURL('image/png');
-  a.download = `can_${norm(result.cfg.id)}_chart.png`;
+  a.href = URL.createObjectURL(b);
+  a.download = n;
   a.click();
-};
+  URL.revokeObjectURL(a.href);
+}
+
+draw([]);
 </script>
 
 </body>
