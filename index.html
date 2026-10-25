@@ -119,17 +119,26 @@ $('file').onchange = async e => {
   $('fileStatus').textContent = `Loaded ${f.name}: ${source.length.toLocaleString()} lines.`;
 };
 
-function parse(s) {
-  let p = s.trim().split(/[\s,;]+/);
-  if (p.length < 5) return null;
-  let t = Number(p[0]), id = p[1].replace(/^0x/i, '').toUpperCase(), payload = p[4].replace(/^0x/i, '').replace(/[^0-9a-f]/gi, '');
-  if (!Number.isFinite(t) || payload.length < 2) return null;
-  let b = [];
-  for (let i = 0; i + 1 < payload.length; i += 2) b.push(parseInt(payload.slice(i, i + 2), 16));
-  return { t, id, payload: payload.toUpperCase(), b };
+function norm(s) {
+  s = String(s).trim().toLowerCase().replace(/^0x/, '');
+  return s.replace(/^0+(?=.)/, '') || '0';
 }
 
-function extract(bytes, sb, st, n, mode) {
+function parse(line) {
+  let p = line.trim().split(',').map(s => s.trim());
+  if (p.length < 5) return null;
+  let t = Number(p[0]);
+  let id = p[1].replace(/^0x/i, '').toUpperCase();
+  let d = p[4].replace(/\s/g, '');
+  if (!Number.isFinite(t) || !/^[0-9a-f]*$/i.test(d) || d.length % 2 !== 0) return null;
+  let b = [];
+  for (let i = 0; i < d.length; i += 2) {
+    b.push(parseInt(d.slice(i, i + 2), 16));
+  }
+  return { t, id, payload: d.toUpperCase(), b };
+}
+
+function extract(bytes, sb, n, mode) {
   let byteCount = Math.ceil(n / 8);
   if (sb + byteCount > bytes.length) return null;
   let b = bytes.slice(sb, sb + byteCount);
@@ -144,32 +153,33 @@ function fmt(n) {
 }
 
 $('run').onclick = () => {
-  let id = $('id').value.trim().replace(/^0x/i, '').toUpperCase(),
-      sb = +$('sb').value,
-      st = +$('bit').value,
-      n = +$('len').value,
-      scale = +$('scale').value,
-      offset = +$('offset').value,
-      mode = $('mode').value,
-      endian = $('endian').value;
+  let targetId = norm($('id').value);
+  let sb = +$('sb').value;
+  let n = +$('len').value;
+  let scale = +$('scale').value;
+  let offset = +$('offset').value;
+  let mode = $('mode').value;
+  let endian = $('endian').value;
 
   if (!source.length) {
     $('msg').textContent = 'Please choose a log file first.';
     $('msg').className = 'err';
     return;
   }
-  if (!id || !Number.isInteger(sb) || sb < 0 || sb > 7 || !Number.isInteger(n) || n < 1 || !Number.isFinite(scale) || !Number.isFinite(offset)) {
+  if (!targetId || !Number.isInteger(sb) || sb < 0 || sb > 7 || !Number.isInteger(n) || n < 1 || !Number.isFinite(scale) || !Number.isFinite(offset)) {
     $('msg').textContent = 'Check the signal settings.';
     $('msg').className = 'err';
     return;
   }
 
   out = [];
-  source.map(parse).filter(Boolean).filter(r => r.id === id).forEach(r => {
-    let raw = extract(r.b, sb, st, n, endian);
+  source.forEach(line => {
+    let r = parse(line);
+    if (!r || norm(r.id) !== targetId) return;
+    let raw = extract(r.b, sb, n, endian);
     if (raw === null) return;
     let y = mode === 'raw' ? raw : mode === 'percent' ? raw / (2**n - 1) * 100 : raw * scale + offset;
-    out.push({ ...r, raw, y });
+    out.push({ t: r.t, id: r.id, payload: r.payload, raw, y });
   });
 
   if (!out.length) {
@@ -203,7 +213,7 @@ $('run').onclick = () => {
   }
 
   draw(plot);
-  $('msg').textContent = `Analyzed ${out.length.toLocaleString()} samples for CAN ID ${id}.`;
+  $('msg').textContent = `Analyzed ${out.length.toLocaleString()} samples for CAN ID ${$('id').value}.`;
   $('msg').className = 'ok';
   $('csv').disabled = false;
   $('png').disabled = false;
