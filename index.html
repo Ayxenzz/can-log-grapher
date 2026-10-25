@@ -49,16 +49,16 @@
     <h2>2. Signal settings</h2>
     <div class="grid">
       <label>CAN ID (hex)<input id="id" value="158"></label>
-      <label>Start byte (0–7)<input id="sb" type="number" min="0" max="7" value="0"></label>
+      <label>Start byte (0–7)<input id="sb" type="number" min="0" max="7" value="1"></label>
       <label>Start bit (0–7)<input id="bit" type="number" min="0" max="7" value="0"></label>
-      <label>Bit length (1–64)<input id="len" type="number" min="1" max="64" value="8"></label>
+      <label>Bit length (1–64)<input id="len" type="number" min="1" max="64" value="16"></label>
       <label>Bit/byte order
         <select id="endian">
-          <option value="little">Intel / little-endian</option>
           <option value="big">Motorola / big-endian (DBC)</option>
+          <option value="little">Intel / little-endian</option>
         </select>
       </label>
-      <label>Scale multiplier<input id="scale" type="number" step="any" value="1"></label>
+      <label>Scale multiplier<input id="scale" type="number" step="any" value="0.01"></label>
       <label>Offset<input id="offset" type="number" step="any" value="0"></label>
       <label>Output
         <select id="mode">
@@ -139,13 +139,16 @@ function extract(bytes, sb, st, n, mode) {
       if ((bytes[bi] >> bt) & 1) v |= 1n << BigInt(i);
     }
   } else {
-    let bi = sb, bt = st;
-    for (let i = 0; i < n; i++) {
-      if (bi >= bytes.length) return null;
-      v = (v << 1n) | BigInt((bytes[bi] >> bt) & 1);
-      bt--;
-      if (bt < 0) { bt = 7; bi++; }
+    let totalBits = sb * 8 + st + n;
+    let endByte = Math.ceil(totalBits / 8);
+    if (endByte > bytes.length) return null;
+    let subBytes = bytes.slice(sb, endByte);
+    for (let i = 0; i < subBytes.length; i++) {
+      v = (v << 8n) + BigInt(subBytes[i]);
     }
+    let shiftRight = (endByte * 8) - (sb * 8 + st + n);
+    let mask = (1n << BigInt(n)) - 1n;
+    v = (v >> BigInt(shiftRight)) & mask;
   }
   return Number(v);
 }
