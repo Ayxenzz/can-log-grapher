@@ -34,7 +34,7 @@
 
 <header>
   <h1>CAN Bit Signal Analyzer</h1>
-  <div>Extract exact bits, graph the signal, and export CSV.</div>
+  <div>Extract exact bytes, graph the signal, and export CSV.</div>
 </header>
 
 <main>
@@ -131,33 +131,12 @@ function parse(s) {
 
 function extract(bytes, sb, st, n, mode) {
   let byteCount = Math.ceil(n / 8);
-  if (st === 0 && n % 8 === 0 && sb + byteCount <= bytes.length) {
-    let sub = bytes.slice(sb, sb + byteCount);
-    let val = 0;
-    if (mode === 'little') {
-      sub.forEach((v, i) => val += v * (256 ** i));
-    } else {
-      sub.forEach(v => val = val * 256 + v);
-    }
-    return val;
-  }
-
-  let v = 0n;
-  if (mode === 'little') {
-    for (let i = 0; i < n; i++) {
-      let p = sb * 8 + st + i, bi = Math.floor(p / 8), bt = p % 8;
-      if (bi >= bytes.length) return null;
-      if ((bytes[bi] >> bt) & 1) v |= 1n << BigInt(i);
-    }
-  } else {
-    for (let i = 0; i < n; i++) {
-      let curByte = Math.floor((sb * 8 + st - i) / 8);
-      let curBit = (sb * 8 + st - i) % 8;
-      if (curByte < 0 || curByte >= bytes.length) return null;
-      v = (v << 1n) | BigInt((bytes[curByte] >> curBit) & 1);
-    }
-  }
-  return Number(v);
+  if (sb + byteCount > bytes.length) return null;
+  let b = bytes.slice(sb, sb + byteCount);
+  let big = 0, little = 0;
+  b.forEach(v => big = big * 256 + v);
+  b.forEach((v, i) => little += v * (256 ** i));
+  return mode === 'little' ? little : big;
 }
 
 function fmt(n) {
@@ -179,7 +158,7 @@ $('run').onclick = () => {
     $('msg').className = 'err';
     return;
   }
-  if (!id || !Number.isInteger(sb) || sb < 0 || sb > 7 || !Number.isInteger(st) || st < 0 || st > 7 || !Number.isInteger(n) || n < 1 || n > 64 || !Number.isFinite(scale) || !Number.isFinite(offset)) {
+  if (!id || !Number.isInteger(sb) || sb < 0 || sb > 7 || !Number.isInteger(n) || n < 1 || !Number.isFinite(scale) || !Number.isFinite(offset)) {
     $('msg').textContent = 'Check the signal settings.';
     $('msg').className = 'err';
     return;
